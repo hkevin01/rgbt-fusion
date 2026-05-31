@@ -6,6 +6,9 @@
 ![Task](https://img.shields.io/badge/tasks-classification%20%7C%20segmentation-0A66C2)
 ![Fusion](https://img.shields.io/badge/fusion-early%20%7C%20mid%20%7C%20late%20%7C%20research-8A2BE2)
 ![Status](https://img.shields.io/badge/status-research%20baseline-orange)
+![Repo](https://img.shields.io/badge/repo-hkevin01%2Frgbt--fusion-181717?logo=github)
+![Last Commit](https://img.shields.io/github/last-commit/hkevin01/rgbt-fusion)
+![Open Issues](https://img.shields.io/github/issues/hkevin01/rgbt-fusion)
 
 RGB-T Fusion is a modular training framework for multimodal computer vision experiments that combine visible-spectrum RGB imagery with thermal imagery. The project is designed to make research iteration fast while staying practical for real GPU training workflows. It gives you one configurable entrypoint and multiple fusion strategies, so you can compare methods with minimal code changes and clear experiment outputs.
 
@@ -24,9 +27,12 @@ The codebase supports both classification and semantic segmentation under the sa
 - [Fusion Strategy Guide](#fusion-strategy-guide)
 - [Training Lifecycle](#training-lifecycle)
 - [Configuration Reference](#configuration-reference)
+- [Experiment Profiles](#experiment-profiles)
+- [Metric Semantics](#metric-semantics)
 - [Runbook](#runbook)
 - [Output Artifacts](#output-artifacts)
 - [Troubleshooting Tips](#troubleshooting-tips)
+- [Roadmap Next Steps](#roadmap-next-steps)
 - [Collapsible API Reference](#collapsible-api-reference)
 - [Repository Layout](#repository-layout)
 
@@ -212,6 +218,46 @@ Use this section to reason about what a parameter changes before launching long 
 > [!TIP]
 > Keep one baseline config unchanged and branch new files for experiments. This makes regressions easier to detect and keeps result interpretation clean.
 
+### Internal Config Links
+
+- [classification_early.yaml](configs/classification_early.yaml)
+- [classification_research.yaml](configs/classification_research.yaml)
+- [segmentation_mid.yaml](configs/segmentation_mid.yaml)
+- [segmentation_research.yaml](configs/segmentation_research.yaml)
+
+## Experiment Profiles
+
+The repository already includes four starter experiment profiles that are intentionally different in task type, fusion method, and optimization settings. This gives you a built-in mini benchmark suite for fast smoke tests and first-pass strategy comparisons.
+
+Each profile can be treated as a reproducible baseline. Rather than rewriting one config repeatedly, clone one file per hypothesis so that every run remains auditable.
+
+| # | Config File | Task | Backbone | Fusion | Resolution | Epochs | Batch Size | LR | Scheduler |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | configs/classification_early.yaml | classification | resnet18 | early | 256x256 | 20 | 16 | 3e-4 | cosine |
+| 2 | configs/classification_research.yaml | classification | resnet18 | research | 256x256 | 30 | 12 | 2e-4 | cosine |
+| 3 | configs/segmentation_mid.yaml | segmentation | mobilenet_v3_small | mid | 320x320 | 40 | 8 | 5e-4 | poly |
+| 4 | configs/segmentation_research.yaml | segmentation | resnet18 | research | 320x320 | 50 | 6 | 3e-4 | poly |
+
+> [!NOTE]
+> This table is a compact run planning view. It helps decide which profile is suitable for quick debug runs versus longer research-grade training.
+
+## Metric Semantics
+
+Metrics are task-aware and are selected from the same runtime depending on the task block in config. This avoids maintaining separate codepaths while still producing meaningful evaluation outputs for each prediction problem.
+
+When interpreting results, compare metrics only within the same task family. Classification accuracy and segmentation mIoU represent different error surfaces and cannot be directly compared as if they measure the same objective.
+
+| # | Task | Primary Metric | Computation Surface | Best Direction | Implementation Source |
+| --- | --- | --- | --- | --- | --- |
+| 1 | classification | accuracy | sample-level class prediction | higher is better | src/utils/metrics.py (ClassificationMetrics) |
+| 2 | segmentation | mIoU | pixel-level class overlap by confusion matrix | higher is better | src/utils/metrics.py (MeanIoU) |
+| 3 | both | validation loss | criterion over model logits and targets | lower is better | src/training/validate.py |
+| 4 | both | training loss | batch-averaged criterion during optimization | lower is better | src/training/train.py |
+| 5 | run selection | best_metric | accuracy for cls, mIoU for seg | higher is better | src/main.py checkpoint logic |
+
+> [!IMPORTANT]
+> Best checkpoint selection is task-dependent by design. The training loop automatically chooses accuracy for classification and mIoU for segmentation.
+
 ## Runbook
 
 The following commands are direct entry points that map to the existing scripts and modules in the repository. They are intentionally minimal and can be wrapped by your own orchestration tools.
@@ -259,6 +305,21 @@ Training failures in multimodal pipelines usually come from path mismatches, sha
 
 > [!NOTE]
 > This troubleshooting table focuses on high-frequency failure modes observed in RGB-T workflows.
+
+## Roadmap Next Steps
+
+The framework is already usable for baseline experiments, but the highest-impact upgrades are related to distributed training, richer evaluation outputs, and stronger reproducibility reporting.
+
+Use this list as an implementation queue when deciding what to build next.
+
+- [ ] Add DistributedDataParallel launch path and rank-aware logging in src/main.py.
+- [ ] Add evaluation-only mode with checkpoint loading and no optimizer state creation.
+- [ ] Add per-class IoU export and confusion matrix image generation for segmentation runs.
+- [ ] Add simple benchmark script for running all four shipped configs and collecting summary metrics.
+- [ ] Add CI workflow for lint and basic import checks.
+
+> [!TIP]
+> If you need one immediate coding priority, start with evaluation-only mode. It shortens iteration cycles and improves experiment triage without changing training behavior.
 
 ## Runtime State View
 
@@ -329,6 +390,18 @@ stateDiagram-v2
 
 - src/utils/visualization.py
   - save_fusion_visualization(...): exports four-panel visual summaries per epoch.
+
+### API Navigation Links
+
+- [src/main.py](src/main.py)
+- [src/data/fusion_dataset.py](src/data/fusion_dataset.py)
+- [src/models/fusion_model.py](src/models/fusion_model.py)
+- [src/training/train.py](src/training/train.py)
+- [src/training/validate.py](src/training/validate.py)
+- [src/utils/config.py](src/utils/config.py)
+- [src/utils/logger.py](src/utils/logger.py)
+- [src/utils/metrics.py](src/utils/metrics.py)
+- [src/utils/visualization.py](src/utils/visualization.py)
 
 </details>
 
