@@ -1,0 +1,55 @@
+experiment:
+  name: seg_mid_mobilenet
+  output_dir: runs/seg_mid_mobilenet
+  seed: 7
+
+task:
+  name: segmentation
+  num_classes: 6
+  ignore_index: 255
+
+dataset:
+  train:
+    root: data/sample_rgbt
+    split: train
+    pairing_mode: folder
+    rgb_dir: rgb
+    thermal_dir: thermal
+    mask_dir: masks
+  val:
+    root: data/sample_rgbt
+    split: val
+    pairing_mode: folder
+    rgb_dir: rgb
+    thermal_dir: thermal
+    mask_dir: masks
+  image_size: [320, 320]
+
+model:
+  backbone: mobilenet_v3_small
+  fusion_strategy: mid
+  pretrained: true
+
+training:
+  epochs: 40
+  batch_size: 8
+  lr: 0.0005
+  weight_decay: 0.00005
+  num_workers: 8
+  pin_memory: true
+  amp: true
+  grad_clip_norm: 1.0
+  log_interval: 20
+  resume_from: null
+
+scheduler:
+  name: poly
+  power: 0.9
+  min_lr: 1.0e-6
+
+multi_gpu:
+  enabled: true
+  distributed: false
+
+logging:
+  tensorboard: true

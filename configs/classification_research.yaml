@@ -1,0 +1,53 @@
+experiment:
+  name: cls_research_resnet18
+  output_dir: runs/cls_research_resnet18
+  seed: 42
+
+task:
+  name: classification
+  num_classes: 4
+
+dataset:
+  train:
+    root: data/sample_rgbt
+    split: train
+    pairing_mode: folder
+    rgb_dir: rgb
+    thermal_dir: thermal
+    labels_file: labels_classification.csv
+  val:
+    root: data/sample_rgbt
+    split: val
+    pairing_mode: folder
+    rgb_dir: rgb
+    thermal_dir: thermal
+    labels_file: labels_classification.csv
+  image_size: [256, 256]
+
+model:
+  backbone: resnet18
+  fusion_strategy: research
+  pretrained: true
+
+training:
+  epochs: 30
+  batch_size: 12
+  lr: 0.0002
+  weight_decay: 0.0001
+  num_workers: 8
+  pin_memory: true
+  amp: true
+  grad_clip_norm: 1.0
+  log_interval: 20
+  resume_from: null
+
+scheduler:
+  name: cosine
+  min_lr: 1.0e-6
+
+multi_gpu:
+  enabled: true
+  distributed: false
+
+logging:
+  tensorboard: true
