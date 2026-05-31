@@ -26,5 +26,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="RGB-T Fusion Training")
     parser.add_argument("--config", type=str, required=True, help="Path to YAML config")
     parser.add_argument("--resume", type=str, default=None, help="Checkpoint path to resume")
+    parser.add_argument("--checkpoint", type=str, default=None, help="Checkpoint path for eval-only mode")
+    parser.add_argument("--eval-only", action="store_true", help="Run validation only and exit")
     parser.add_argument("--device", type=str, default="cuda", help="Device, e.g. cuda or cpu")
     return parser.parse_args()

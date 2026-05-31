@@ -74,7 +74,10 @@ def validate(
     if cls_metrics is not None:
         result["accuracy"] = cls_metrics.compute()
     if miou_metrics is not None:
-        result["miou"] = miou_metrics.compute()
+        per_class = miou_metrics.per_class_iou()
+        result["miou"] = float(per_class.mean().item())
+        for idx, val in enumerate(per_class.tolist()):
+            result[f"iou_class_{idx}"] = float(val)
 
     if first_batch is not None:
         rgb0, thermal0, fused0, pred0 = first_batch

@@ -38,7 +38,9 @@ class MeanIoU:
         self.confmat += bins.reshape(self.num_classes, self.num_classes).cpu()
 
     def compute(self) -> float:
+        return float(self.per_class_iou().mean().item())
+
+    def per_class_iou(self) -> torch.Tensor:
         inter = torch.diag(self.confmat).float()
         union = self.confmat.sum(dim=1).float() + self.confmat.sum(dim=0).float() - inter
-        iou = inter / torch.clamp(union, min=1.0)
-        return float(iou.mean().item())
+        return inter / torch.clamp(union, min=1.0)

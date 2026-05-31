@@ -80,10 +80,17 @@ def save_checkpoint(state, out_dir: str, is_best: bool = False) -> None:
         torch.save(state, Path(out_dir) / "checkpoint_best.pt")
 
 
-def load_checkpoint(model, optimizer, scaler: Optional[torch.amp.GradScaler], ckpt_path: str, device: torch.device):
+def load_checkpoint(
+    model,
+    optimizer,
+    scaler: Optional[torch.amp.GradScaler],
+    ckpt_path: str,
+    device: torch.device,
+):
     ckpt = torch.load(ckpt_path, map_location=device)
     model.load_state_dict(ckpt["model"])
-    optimizer.load_state_dict(ckpt["optimizer"])
+    if optimizer is not None and ckpt.get("optimizer") is not None:
+        optimizer.load_state_dict(ckpt["optimizer"])
     if scaler is not None and ckpt.get("scaler") is not None:
         scaler.load_state_dict(ckpt["scaler"])
     return int(ckpt.get("epoch", 0)) + 1, float(ckpt.get("best_metric", -1.0))
@@ -113,7 +120,7 @@ def main() -> None:
     train_cfg["image_size"] = image_size
     val_cfg["image_size"] = image_size
 
-    train_ds = FusionDataset(train_cfg, task_name=task_name, train=True)
+    train_ds = FusionDataset(train_cfg, task_name=task_name, train=not args.eval_only)
     val_ds = FusionDataset(val_cfg, task_name=task_name, train=False)
 
     num_workers = int(cfg["training"].get("num_workers", 4))
@@ -123,16 +130,18 @@ def main() -> None:
     prefetch_factor = int(cfg["training"].get("prefetch_factor", 2))
     persistent_workers = bool(cfg["training"].get("persistent_workers", True))
 
-    train_loader = build_dataloader(
-        dataset=train_ds,
-        batch_size=batch_size,
-        shuffle=True,
-        num_workers=num_workers,
-        pin_memory=pin_memory,
-        drop_last=False,
-        prefetch_factor=prefetch_factor,
-        persistent_workers=persistent_workers,
-    )
+    train_loader = None
+    if not args.eval_only:
+        train_loader = build_dataloader(
+            dataset=train_ds,
+            batch_size=batch_size,
+            shuffle=True,
+            num_workers=num_workers,
+            pin_memory=pin_memory,
+            drop_last=False,
+            prefetch_factor=prefetch_factor,
+            persistent_workers=persistent_workers,
+        )
     val_loader = build_dataloader(
         dataset=val_ds,
         batch_size=batch_size,
@@ -151,14 +160,16 @@ def main() -> None:
     model = maybe_wrap_multi_gpu(model, cfg)
 
     criterion = build_criterion(cfg).to(device)
-    optimizer = AdamW(
-        model.parameters(),
-        lr=float(cfg["training"]["lr"]),
-        weight_decay=float(cfg["training"].get("weight_decay", 1e-4)),
-    )
-
+    optimizer = None
+    scheduler = None
     epochs = int(cfg["training"]["epochs"])
-    scheduler = build_scheduler(optimizer, cfg.get("scheduler", {}), epochs)
+    if not args.eval_only:
+        optimizer = AdamW(
+            model.parameters(),
+            lr=float(cfg["training"]["lr"]),
+            weight_decay=float(cfg["training"].get("weight_decay", 1e-4)),
+        )
+        scheduler = build_scheduler(optimizer, cfg.get("scheduler", {}), epochs)
 
     amp_enabled = bool(cfg["training"].get("amp", True)) and device.type == "cuda"
     amp_dtype = get_amp_dtype(cfg)
@@ -168,7 +179,7 @@ def main() -> None:
     start_epoch = 1
     best_metric = -1.0
 
-    resume_path = args.resume or cfg["training"].get("resume_from")
+    resume_path = args.checkpoint if args.eval_only else (args.resume or cfg["training"].get("resume_from"))
     if resume_path:
         start_epoch, best_metric = load_checkpoint(model, optimizer, scaler, resume_path, device)
         logger.info(f"Resumed training from {resume_path} at epoch {start_epoch}")
@@ -178,6 +189,23 @@ def main() -> None:
         f"Running on device: {device} | AMP: {amp_enabled} | AMP dtype: {amp_dtype} | "
         f"channels_last: {channels_last}"
     )
+
+    if args.eval_only:
+        eval_stats = validate(
+            model=model,
+            loader=val_loader,
+            criterion=criterion,
+            device=device,
+            cfg=cfg,
+            epoch=start_epoch,
+            logger=logger,
+        )
+        logger.info(f"Eval complete: {eval_stats}")
+        if tb_writer is not None:
+            for k, v in eval_stats.items():
+                tb_writer.add_scalar(f"eval/{k}", v, start_epoch)
+            tb_writer.close()
+        return
 
     for epoch in range(start_epoch, epochs + 1):
         train_stats = train_one_epoch(
