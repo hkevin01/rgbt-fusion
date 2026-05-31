@@ -38,6 +38,13 @@ training:
   num_workers: 8
   pin_memory: true
   amp: true
+  amp_dtype: float16
+  channels_last: true
+  prefetch_factor: 2
+  persistent_workers: true
+  cudnn_benchmark: true
+  allow_tf32: true
+  matmul_precision: high
   grad_clip_norm: 1.0
   log_interval: 20
   resume_from: null
