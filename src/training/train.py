@@ -9,6 +9,13 @@ from tqdm import tqdm
 from src.utils.metrics import ClassificationMetrics
 
 
+def _get_amp_dtype(cfg: Dict[str, Any]) -> torch.dtype:
+    dtype = str(cfg.get("training", {}).get("amp_dtype", "float16")).lower()
+    if dtype in {"bfloat16", "bf16"}:
+        return torch.bfloat16
+    return torch.float16
+
+
 def train_one_epoch(
     model: nn.Module,
     loader,
@@ -23,6 +30,8 @@ def train_one_epoch(
     model.train()
     task_name = cfg["task"]["name"]
     amp_enabled = bool(cfg["training"].get("amp", True)) and device.type == "cuda"
+    amp_dtype = _get_amp_dtype(cfg)
+    channels_last = bool(cfg["training"].get("channels_last", True)) and device.type == "cuda"
     grad_clip_norm = cfg["training"].get("grad_clip_norm", None)
 
     running_loss = 0.0
@@ -32,11 +41,14 @@ def train_one_epoch(
     for batch in progress:
         rgb = batch["rgb"].to(device, non_blocking=True)
         thermal = batch["thermal"].to(device, non_blocking=True)
-        target = batch["target"].to(device, non_blocking=True)
+        if channels_last:
+            rgb = rgb.contiguous(memory_format=torch.channels_last)
+            thermal = thermal.contiguous(memory_format=torch.channels_last)
+        target = batch["target"].to(device, non_blocking=True).long()
 
         optimizer.zero_grad(set_to_none=True)
 
-        with torch.autocast(device_type=device.type, dtype=torch.float16, enabled=amp_enabled):
+        with torch.autocast(device_type=device.type, dtype=amp_dtype, enabled=amp_enabled):
             logits = model(rgb, thermal)
             loss = criterion(logits, target)
 

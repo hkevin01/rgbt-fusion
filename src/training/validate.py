@@ -10,6 +10,13 @@ from src.utils.metrics import ClassificationMetrics, MeanIoU
 from src.utils.visualization import save_fusion_visualization
 
 
+def _get_amp_dtype(cfg: Dict[str, Any]) -> torch.dtype:
+    dtype = str(cfg.get("training", {}).get("amp_dtype", "float16")).lower()
+    if dtype in {"bfloat16", "bf16"}:
+        return torch.bfloat16
+    return torch.float16
+
+
 @torch.no_grad()
 def validate(
     model: nn.Module,
@@ -23,6 +30,8 @@ def validate(
     model.eval()
     task_name = cfg["task"]["name"]
     amp_enabled = bool(cfg["training"].get("amp", True)) and device.type == "cuda"
+    amp_dtype = _get_amp_dtype(cfg)
+    channels_last = bool(cfg["training"].get("channels_last", True)) and device.type == "cuda"
 
     cls_metrics = ClassificationMetrics() if task_name == "classification" else None
     miou_metrics = None
@@ -39,9 +48,12 @@ def validate(
     for batch in progress:
         rgb = batch["rgb"].to(device, non_blocking=True)
         thermal = batch["thermal"].to(device, non_blocking=True)
-        target = batch["target"].to(device, non_blocking=True)
+        if channels_last:
+            rgb = rgb.contiguous(memory_format=torch.channels_last)
+            thermal = thermal.contiguous(memory_format=torch.channels_last)
+        target = batch["target"].to(device, non_blocking=True).long()
 
-        with torch.autocast(device_type=device.type, dtype=torch.float16, enabled=amp_enabled):
+        with torch.autocast(device_type=device.type, dtype=amp_dtype, enabled=amp_enabled):
             logits, feats = model(rgb, thermal, return_features=True)
             loss = criterion(logits, target)
 

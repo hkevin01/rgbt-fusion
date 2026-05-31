@@ -3,15 +3,16 @@ from __future__ import annotations
 import os
 import random
 from pathlib import Path
+from typing import Optional
 
 import numpy as np
 import torch
 import torch.nn as nn
 from torch.optim import AdamW
-from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 
 from src.data.fusion_dataset import FusionDataset
+from src.data.loader import build_dataloader
 from src.models.fusion_model import FusionModel
 from src.training.scheduler import build_scheduler
 from src.training.train import train_one_epoch
@@ -25,6 +26,26 @@ def set_seed(seed: int) -> None:
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
+
+
+def get_amp_dtype(cfg) -> torch.dtype:
+    amp_dtype = str(cfg.get("training", {}).get("amp_dtype", "float16")).lower()
+    if amp_dtype in {"bfloat16", "bf16"}:
+        return torch.bfloat16
+    return torch.float16
+
+
+def configure_cuda_runtime(cfg, device: torch.device) -> None:
+    if device.type != "cuda":
+        return
+    training_cfg = cfg.get("training", {})
+    torch.backends.cudnn.benchmark = bool(training_cfg.get("cudnn_benchmark", True))
+    allow_tf32 = bool(training_cfg.get("allow_tf32", True))
+    torch.backends.cuda.matmul.allow_tf32 = allow_tf32
+    torch.backends.cudnn.allow_tf32 = allow_tf32
+    matmul_precision = str(training_cfg.get("matmul_precision", "high"))
+    if matmul_precision in {"highest", "high", "medium"}:
+        torch.set_float32_matmul_precision(matmul_precision)
 
 
 def build_criterion(cfg):
@@ -59,7 +80,7 @@ def save_checkpoint(state, out_dir: str, is_best: bool = False) -> None:
         torch.save(state, Path(out_dir) / "checkpoint_best.pt")
 
 
-def load_checkpoint(model, optimizer, scaler, ckpt_path: str, device: torch.device):
+def load_checkpoint(model, optimizer, scaler: Optional[torch.amp.GradScaler], ckpt_path: str, device: torch.device):
     ckpt = torch.load(ckpt_path, map_location=device)
     model.load_state_dict(ckpt["model"])
     optimizer.load_state_dict(ckpt["optimizer"])
@@ -82,6 +103,7 @@ def main() -> None:
 
     device_name = args.device if args.device != "cuda" or torch.cuda.is_available() else "cpu"
     device = torch.device(device_name)
+    configure_cuda_runtime(cfg, device)
 
     task_name = cfg["task"]["name"]
     image_size = tuple(cfg["dataset"].get("image_size", [256, 256]))
@@ -98,24 +120,34 @@ def main() -> None:
     pin_memory = bool(cfg["training"].get("pin_memory", True)) and device.type == "cuda"
     batch_size = int(cfg["training"]["batch_size"])
 
-    train_loader = DataLoader(
-        train_ds,
+    prefetch_factor = int(cfg["training"].get("prefetch_factor", 2))
+    persistent_workers = bool(cfg["training"].get("persistent_workers", True))
+
+    train_loader = build_dataloader(
+        dataset=train_ds,
         batch_size=batch_size,
         shuffle=True,
         num_workers=num_workers,
         pin_memory=pin_memory,
         drop_last=False,
+        prefetch_factor=prefetch_factor,
+        persistent_workers=persistent_workers,
     )
-    val_loader = DataLoader(
-        val_ds,
+    val_loader = build_dataloader(
+        dataset=val_ds,
         batch_size=batch_size,
         shuffle=False,
         num_workers=num_workers,
         pin_memory=pin_memory,
         drop_last=False,
+        prefetch_factor=prefetch_factor,
+        persistent_workers=persistent_workers,
     )
 
     model = FusionModel(cfg).to(device)
+    channels_last = bool(cfg["training"].get("channels_last", True)) and device.type == "cuda"
+    if channels_last:
+        model = model.to(memory_format=torch.channels_last)
     model = maybe_wrap_multi_gpu(model, cfg)
 
     criterion = build_criterion(cfg).to(device)
@@ -129,7 +161,9 @@ def main() -> None:
     scheduler = build_scheduler(optimizer, cfg.get("scheduler", {}), epochs)
 
     amp_enabled = bool(cfg["training"].get("amp", True)) and device.type == "cuda"
-    scaler = torch.amp.GradScaler(device="cuda", enabled=amp_enabled)
+    amp_dtype = get_amp_dtype(cfg)
+    scaler_enabled = amp_enabled and amp_dtype == torch.float16
+    scaler = torch.amp.GradScaler(device="cuda", enabled=scaler_enabled)
 
     start_epoch = 1
     best_metric = -1.0
@@ -140,7 +174,10 @@ def main() -> None:
         logger.info(f"Resumed training from {resume_path} at epoch {start_epoch}")
 
     logger.info(f"Train samples: {len(train_ds)} | Val samples: {len(val_ds)}")
-    logger.info(f"Running on device: {device} | AMP: {amp_enabled}")
+    logger.info(
+        f"Running on device: {device} | AMP: {amp_enabled} | AMP dtype: {amp_dtype} | "
+        f"channels_last: {channels_last}"
+    )
 
     for epoch in range(start_epoch, epochs + 1):
         train_stats = train_one_epoch(
